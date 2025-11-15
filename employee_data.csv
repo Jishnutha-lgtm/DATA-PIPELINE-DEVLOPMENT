@@ -1,0 +1,11 @@
+employee_id,name,department,age,gender,experience_years,salary,city
+101,John Smith,IT,28,Male,3,52000,New York
+102,Sarah Lee,HR,35,Female,7,65000,Los Angeles
+103,Michael Brown,Finance,40,Male,12,83000,Chicago
+104,Emily Davis,Marketing,,Female,5,58000,Houston
+105,David Johnson,IT,30,Male,,61000,Seattle
+106,Anna Taylor,Finance,38,Female,10,,Boston
+107,Robert Wilson,HR,45,Male,20,90000,,
+108,Karen Martinez,Marketing,29,Female,4,54000,San Francisco
+109,Chris Anderson,IT,33,Male,6,62000,Miami
+110,Laura Thomas,Finance,,Female,8,70000,Denver

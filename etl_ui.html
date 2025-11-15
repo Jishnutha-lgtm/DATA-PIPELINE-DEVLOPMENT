@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ETL Pipeline — In-browser</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- PapaParse for CSV parsing/unparsing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root{
+      --bg:#f7f9fb; --card:#ffffff; --accent:#1f6feb; --muted:#6b7280;
+      --success:#059669;
+    }
+    body{font-family:Inter,ui-sans-serif,system-ui,Arial; margin:0; background:var(--bg); color:#111;}
+    header{padding:18px 24px; background:linear-gradient(90deg,#fff 0%, #f1f5f9 100%); box-shadow:0 1px 0 rgba(0,0,0,0.04);}
+    header h1{margin:0; font-size:18px; color:#0f172a;}
+    .container{display:flex; gap:18px; padding:18px; max-width:1200px; margin:20px auto;}
+    .pane{background:var(--card); border-radius:10px; padding:16px; box-shadow:0 6px 18px rgba(15,23,42,0.06); flex:1; min-width:320px;}
+    .left .controls{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;}
+    button{background:var(--accent); color:white; border:0; padding:10px 12px; border-radius:8px; cursor:pointer; font-weight:600;}
+    button.secondary{background:transparent; color:var(--accent); border:1.5px solid var(--accent);}
+    button.warn{background:#ef4444;}
+    .info{font-size:13px; color:var(--muted); margin-bottom:10px;}
+    input[type=file]{display:none;}
+    label.filebtn{display:inline-block; padding:8px 12px; border-radius:8px; background:#eef6ff; color:var(--accent); cursor:pointer; border:1px dashed #cfe3ff; font-weight:600;}
+    table{border-collapse:collapse; width:100%; font-size:13px;}
+    th,td{border:1px solid #e6eef6; padding:6px 8px; text-align:left; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+    th{background:#f8fafc; font-weight:700; position:sticky; top:0; z-index:1;}
+    .preview{max-height:420px; overflow:auto; border-radius:6px; border:1px solid #eef2ff; padding:8px; background:#fff;}
+    .row{display:flex; gap:12px; align-items:center;}
+    .status{padding:8px 10px; border-radius:8px; background:#f1f5f9; color:var(--muted); font-size:13px;}
+    .small{font-size:12px; color:var(--muted);}
+    .actions{margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;}
+    .download-link{display:inline-block; padding:10px 12px; background:var(--success); color:white; border-radius:8px; text-decoration:none; font-weight:600;}
+    footer{padding:12px 24px; font-size:13px; color:var(--muted); text-align:center;}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ETL Pipeline — Upload CSV, Transform, and Download (Client-side)</h1>
+  </header>
+
+  <div class="container">
+    <!-- LEFT: Run / Controls / Input preview -->
+    <div class="pane left">
+      <h3>Run</h3>
+      <p class="info">Upload a CSV file. The pipeline will drop `name`/`id` columns, impute missing values, one-hot encode categorical columns, and standard-scale numeric columns.</p>
+
+      <div class="controls">
+        <label class="filebtn" title="Choose CSV file">
+          Add file
+          <input id="fileInput" type="file" accept=".csv,text/csv" />
+        </label>
+
+        <button id="runBtn" class="secondary">Run</button>
+        <button id="downloadBtn" class="secondary" style="display:none">Download Clean CSV</button>
+        <button id="copyBtn" class="secondary" style="display:none">Copy Clean Data</button>
+        <button id="clearBtn" class="secondary" style="display:none">Clear</button>
+      </div>
+
+      <div class="row" style="margin-top:8px;">
+        <div class="status" id="status">No file loaded.</div>
+      </div>
+
+      <h4 style="margin-top:14px;">Input preview (first 10 rows)</h4>
+      <div class="preview" id="inputPreview">
+        <div class="small">No data yet — upload a CSV.</div>
+      </div>
+
+      <div style="margin-top:10px;" class="small">
+        <strong>Tips:</strong> For best results the CSV should have a header row. Large files may be slow in the browser.
+      </div>
+    </div>
+
+    <!-- RIGHT: Output preview -->
+    <div class="pane right">
+      <h3>Output — Clean Data</h3>
+      <p class="info">Processed / transformed CSV will appear here. Use <em>Download Clean CSV</em> to save it or <em>Copy Clean Data</em> to copy CSV text.</p>
+
+      <div id="outputInfo" class="status">No output yet.</div>
+
+      <h4 style="margin-top:12px;">Output preview (first 50 rows)</h4>
+      <div class="preview" id="outputPreview">
+        <div class="small">Processed data will appear here after running the pipeline.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Built for demo — runs fully in your browser. Save this file as <code>etl_ui.html</code> and open it with your browser.
+  </footer>
+
+<script>
+/* ==========================
+   ETL logic (client-side)
+   ========================== */
+
+let rawData = null;         // array of objects from PapaParse
+let cleanedCsvText = null;  // final CSV text
+let parsedHeader = null;
+
+const fileInput = document.getElementById('fileInput');
+const status = document.getElementById('status');
+const inputPreview = document.getElementById('inputPreview');
+const outputPreview = document.getElementById('outputPreview');
+const runBtn = document.getElementById('runBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const copyBtn = document.getElementById('copyBtn');
+const outputInfo = document.getElementById('outputInfo');
+const clearBtn = document.getElementById('clearBtn');
+
+fileInput.addEventListener('change', handleFileSelect);
+runBtn.addEventListener('click', runPipeline);
+downloadBtn.addEventListener('click', downloadCleanCSV);
+copyBtn.addEventListener('click', copyCleanCSV);
+clearBtn.addEventListener('click', clearAll);
+
+function handleFileSelect(evt){
+  const f = evt.target.files[0];
+  if(!f) return;
+  if(f.size > 10 * 1024 * 1024) {
+    if(!confirm('File > 10MB may be slow. Continue?')) {
+      fileInput.value = '';
+      return;
+    }
+  }
+  status.textContent = `Loading ${f.name} ...`;
+  Papa.parse(f, {
+    header: true,
+    dynamicTyping: true,
+    skipEmptyLines: true,
+    complete: function(results){
+      rawData = results.data;
+      parsedHeader = results.meta.fields;
+      status.textContent = `Loaded ${f.name} — ${rawData.length} rows, ${parsedHeader.length} columns.`;
+      renderInputPreview();
+      outputPreview.innerHTML = '<div class="small">Processed data will appear here after running the pipeline.</div>';
+      outputInfo.textContent = 'No output yet.';
+      downloadBtn.style.display = 'none';
+      copyBtn.style.display = 'none';
+      clearBtn.style.display = 'inline-block';
+    },
+    error: function(err){
+      status.textContent = `Error parsing file: ${err}`;
+    }
+  });
+}
+
+/* show first 10 rows of input */
+function renderInputPreview(){
+  if(!rawData || rawData.length === 0) {
+    inputPreview.innerHTML = '<div class="small">No rows to preview.</div>';
+    return;
+  }
+  const rows = rawData.slice(0,10);
+  const cols = parsedHeader;
+  inputPreview.innerHTML = generateTableHTML(cols, rows);
+}
+
+/* show output preview */
+function renderOutputPreview(csvText){
+  // parse the generated CSV to show as table
+  const parsed = Papa.parse(csvText, { header: true, dynamicTyping: false, skipEmptyLines: true });
+  const rows = parsed.data.slice(0,50);
+  const cols = parsed.meta.fields || [];
+  outputPreview.innerHTML = generateTableHTML(cols, rows);
+}
+
+/* generate small HTML table from arrays/objects */
+function generateTableHTML(cols, rows){
+  if(!cols || cols.length === 0) return '<div class="small">No columns</div>';
+  let html = '<table><thead><tr>';
+  for(const c of cols){ html += `<th>${escapeHtml(c)}</th>`; }
+  html += '</tr></thead><tbody>';
+  for(const r of rows){
+    html += '<tr>';
+    for(const c of cols){
+      let v = r[c];
+      if(v === null || v === undefined) v = '';
+      html += `<td title="${escapeHtml(String(v))}">${escapeHtml(String(v)).slice(0,120)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+function escapeHtml(s){
+  return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+}
+
+/* -------------------------
+   ETL Transform function
+   ------------------------- */
+function runPipeline(){
+  if(!rawData || rawData.length === 0){
+    alert('Please add a CSV file first.');
+    return;
+  }
+  status.textContent = 'Running ETL pipeline...';
+  try {
+    const rows = structuredClone(rawData); // copy
+    // get list of columns
+    const cols = Object.keys(rows[0] || {});
+    // 1) drop columns that include "name" or "id" (case-insensitive)
+    const dropCols = cols.filter(c => /name|id/i.test(c));
+    for(const r of rows){
+      for(const d of dropCols) delete r[d];
+    }
+    // recompute column names
+    let remainingCols = Object.keys(rows[0] || {});
+    // 2) detect numeric vs categorical columns
+    const numericCols = [];
+    const categoricalCols = [];
+    for(const c of remainingCols){
+      let isNumeric = false;
+      for(const r of rows){
+        const v = r[c];
+        if(v !== null && v !== undefined && v !== '') {
+          if(typeof v === 'number' && !Number.isNaN(v)) { isNumeric = true; break; }
+          // if dynamicTyping didn't produce number, attempt numeric parse
+          if(typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))) {
+            // but ensure not something like a phone with dashes; basic heuristic:
+            isNumeric = true; break;
+          }
+        }
+      }
+      if(isNumeric) numericCols.push(c); else categoricalCols.push(c);
+    }
+
+    // 3) fill missing: numeric -> mean, categorical -> 'Unknown'
+    const numericMeans = {};
+    for(const c of numericCols){
+      let sum=0, count=0;
+      for(const r of rows){
+        let v = r[c];
+        if(typeof v === 'string' && v.trim() !== '') { v = Number(v); r[c] = v; } // coerce string numbers
+        if(typeof v === 'number' && !Number.isNaN(v)){ sum += v; count++; }
+      }
+      const mean = count>0 ? sum/count : 0;
+      numericMeans[c] = mean;
+      for(const r of rows){
+        const v = r[c];
+        if(v === null || v === undefined || v === '' || Number.isNaN(v)) r[c] = mean;
+      }
+    }
+    for(const c of categoricalCols){
+      for(const r of rows){
+        const v = r[c];
+        if(v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) r[c] = 'Unknown';
+      }
+    }
+
+    // 4) One-hot encode categorical columns
+    const oneHotMaps = {}; // col -> unique values array
+    for(const c of categoricalCols){
+      const set = new Set();
+      for(const r of rows) set.add(String(r[c]));
+      oneHotMaps[c] = Array.from(set).sort();
+    }
+
+    // Build new rows with numeric columns (standard-scaled) and one-hot columns
+    // First compute mean & std per numeric column
+    const numericStats = {};
+    for(const c of numericCols){
+      let sum=0, sumsq=0, n=0;
+      for(const r of rows){
+        const v = Number(r[c]);
+        sum += v; sumsq += v*v; n++;
+      }
+      const mean = n>0 ? sum/n : 0;
+      const variance = n>1 ? (sumsq - (sum*sum)/n)/(n-1) : 0;
+      const std = Math.sqrt(Math.max(variance, 0));
+      numericStats[c] = { mean, std: std || 1 }; // avoid divide by 0
+    }
+
+    const transformedRows = [];
+    for(const r of rows){
+      const obj = {};
+      // add scaled numeric features
+      for(const c of numericCols){
+        const v = Number(r[c]);
+        const s = numericStats[c];
+        obj[c] = (v - s.mean)/s.std;
+      }
+      // add one-hot encoded categorical features
+      for(const c of categoricalCols){
+        const value = String(r[c]);
+        const uniqueVals = oneHotMaps[c];
+        for(const uv of uniqueVals){
+          // column name: col_uv (spaces replaced)
+          const colName = `${c}__${uv}`.replaceAll(' ','_').replaceAll('/','_');
+          obj[colName] = (value === uv) ? 1 : 0;
+        }
+      }
+      transformedRows.push(obj);
+    }
+
+    // 5) Convert transformedRows to CSV text
+    const csv = Papa.unparse(transformedRows, { quotes: false });
+    cleanedCsvText = csv;
+    // update UI: enable download / copy
+    downloadBtn.style.display = 'inline-block';
+    copyBtn.style.display = 'inline-block';
+    status.textContent = `ETL complete — ${transformedRows.length} rows, ${Object.keys(transformedRows[0]||{}).length} columns.`;
+    outputInfo.textContent = `ETL complete — ${transformedRows.length} rows, ${Object.keys(transformedRows[0]||{}).length} columns.`;
+    renderOutputPreview(csv);
+    // prepare download link
+    prepareDownload(csv);
+  } catch(err){
+    console.error(err);
+    status.textContent = 'Error running pipeline: ' + (err && err.message ? err.message : String(err));
+    alert('Error: ' + (err && err.message ? err.message : String(err)));
+  }
+}
+
+/* Create a download link using blob and update downloadBtn behavior */
+function prepareDownload(csvText){
+  const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  downloadBtn.style.display = 'inline-block';
+  downloadBtn.textContent = 'Download Clean CSV';
+  downloadBtn.onclick = function(){
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'clean_data.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+}
+
+/* copy CSV text to clipboard */
+async function copyCleanCSV(){
+  if(!cleanedCsvText) return alert('No cleaned CSV to copy.');
+  try{
+    await navigator.clipboard.writeText(cleanedCsvText);
+    copyBtn.textContent = 'Copied!';
+    setTimeout(()=> copyBtn.textContent = 'Copy Clean Data', 1500);
+  } catch(e){
+    alert('Copy failed. Your browser may block clipboard access. You can download instead.');
+  }
+}
+
+/* Download action already wired by prepareDownload */
+function downloadCleanCSV(){ /* placeholder kept for compatibility */ }
+
+/* clear state */
+function clearAll(){
+  rawData = null; cleanedCsvText = null; parsedHeader = null;
+  fileInput.value = '';
+  status.textContent = 'No file loaded.';
+  inputPreview.innerHTML = '<div class="small">No data yet — upload a CSV.</div>';
+  outputPreview.innerHTML = '<div class="small">Processed data will appear here after running the pipeline.</div>';
+  outputInfo.textContent = 'No output yet.';
+  downloadBtn.style.display = 'none';
+  copyBtn.style.display = 'none';
+  clearBtn.style.display = 'none';
+}
+</script>
+</body>
+</html>
