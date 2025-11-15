@@ -181,3 +181,6 @@ Suggestions and improvements are welcome!
 📜 License
 
 This project is licensed under the MIT License.
+
+<img width="1897" height="969" alt="image" src="https://github.com/user-attachments/assets/7f652285-84dc-49e8-8b76-58705e4074b9" />
+
